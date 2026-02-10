@@ -1,0 +1,6 @@
+@import "tailwindcss"; /* */
+
+/* Custom 'Knopper Blue' Theme */
+@theme {
+  --color-knopper-blue: #0046ad; /* Define custom colors directly in CSS */
+}
