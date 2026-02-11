@@ -1,34 +1,27 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+import POSTest from './components/POSTest.jsx'; // Import your testing component
 
 function App() {
-  const [count, setCount] = useState(0)
-
   return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1 className="text-5xl font-bold text-blue-600 animate-bounce">Knopper POS</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.jsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
+    <div className="min-h-screen bg-gray-100">
+      {/* Navigation Bar */}
+      {/* Updated Navigation Bar in App.jsx */}
+      <nav className="bg-knopper-blue p-4 text-white shadow-lg flex items-center gap-4">
+        {/* Logo stays small enough not to crowd the text */}
+        <img 
+          src="/logo.png" 
+          alt="Knopper Logo" 
+          className="h-10 w-10 object-contain rounded-md bg-white p-0.5" 
+        />
+        <h1 className="text-2xl font-bold font-display">
+          Knopper Pharmacy POS
+        </h1>
+      </nav>
+
+      {/* Main Content */}
+      <main className="container mx-auto mt-10">
+        <POSTest />
+      </main>
+    </div>
   )
 }
 
