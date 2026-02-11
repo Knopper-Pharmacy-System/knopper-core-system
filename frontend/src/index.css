@@ -1,6 +1,13 @@
-@import "tailwindcss"; /* */
+@import "tailwindcss";
 
-/* Custom 'Knopper Blue' Theme */
 @theme {
-  --color-knopper-blue: #0046ad; /* Define custom colors directly in CSS */
+  /* Branding Colors */
+  --color-knopper-blue: #0046ad;
+  --color-knopper-accent: #1AA0C4;
+  --color-success: #4ade80;
+  --color-warning: #fb923c;
+  
+  /* Typography */
+  --font-display: "Lora", serif;
+  --font-sans: "Inter", sans-serif;
 }
