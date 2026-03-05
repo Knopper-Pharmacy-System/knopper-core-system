@@ -4,8 +4,8 @@ This repository contains the backend and frontend systems for the Knopper Pharma
 
 ## Recent Updates
 
-- **Branching**: Created the `backend_v1` branch to start core system development.
-- **Backend Setup**: Initialized the `backend/` directory structure.
-- **Initial Codebase**: Created `app.py` as the entry point for the backend logic.
-- **Repository Access**: Successfully configured collaborator permissions and pushed the initial structure to the remote repository.
+- **Assets Migration**: Created `backend/src` to store core project assets.
+- **Database Assets**: Added `Knopper_DB.csv` and `Knopper_DBv2.csv` for inventory management.
+- **Inventory Scripts**: Included `import_inventory.py` to handle data processing and database population.
+- **Repository Access**: Successfully configured collaborator permissions for **Nyaeko-san** and pushed the updated structure.
 
