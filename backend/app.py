@@ -211,47 +211,95 @@ def get_all_users():
         return jsonify({"error": str(e)}), 500
     finally:
         cur.close()
-# update user pass
 
-@app.route('/update-password', methods=['PUT'])
+@app.route('/update-users/<int:target_user_id>', methods=['PUT'])
 @jwt_required()
-def update_password():
-    # 1. Get the Role from the token
+def edit_user(target_user_id):
+    # 1. STRICT SECURITY CHECK: Only Admins allowed
     claims = get_jwt()
-    current_role = claims.get('role')
+    if claims.get('role') != 'admin':
+        return jsonify({"message": "Access Denied: Only Administrators can edit user profiles."}), 403
 
-    # 2. STRICT SECURITY CHECK: Only Admins allowed
-    if current_role != 'admin':
-        return jsonify({"message": "Access Denied: Only Administrators can change passwords."}), 403
-
-    # 3. Get Data from Postman
+    # 2. Get Data from Postman payload
     data = request.json
-    target_user_id = str(data.get('user_id')) # Whose password are we changing?
-    new_password = data.get('new_password')
+    if not data:
+        return jsonify({"message": "No data provided to update."}), 400
 
-    if not new_password or not target_user_id:
-        return jsonify({"message": "Missing user_id or new_password"}), 400
+    username = data.get('username')
+    full_name = data.get('full_name')
+    role = data.get('role')
+    branch_id = data.get('branch_id')
+    is_active = data.get('is_active') # True or False
+    password = data.get('password')
 
     cur = mysql.connection.cursor()
     try:
-        # 4. Hash the new password
-        hashed_pw = bcrypt.generate_password_hash(new_password).decode('utf-8')
-        
-        # 5. Execute Update
-        cur.execute("UPDATE USERS SET password_hash = %s WHERE user_id = %s", (hashed_pw, target_user_id))
-        
-        # Check if a user was actually updated (in case they typed a wrong user_id)
-        if cur.rowcount == 0:
+        # 3. VERIFY USER EXISTS
+        cur.execute("SELECT * FROM USERS WHERE user_id = %s", (target_user_id,))
+        if not cur.fetchone():
             return jsonify({"message": f"User ID {target_user_id} not found."}), 404
 
+        # 4. DUPLICATE CHECK (Exclude the current user we are editing)
+        if username or (full_name and branch_id):
+            cur.execute("""
+                SELECT user_id, username, full_name, branch_id 
+                FROM USERS 
+                WHERE user_id != %s 
+                  AND (username = %s OR (full_name = %s AND branch_id = %s))
+            """, (target_user_id, username, full_name, branch_id))
+            
+            conflict = cur.fetchone()
+            if conflict:
+                if conflict[1] == username:
+                    return jsonify({"message": f"Conflict: Username '{username}' is already taken."}), 409
+                if conflict[2] == full_name and conflict[3] == int(branch_id):
+                    return jsonify({"message": f"Conflict: '{full_name}' already exists in Branch {branch_id}."}), 409
+
+        # 5. DYNAMICALLY BUILD THE UPDATE QUERY
+        # This allows you to update just one field, or all of them at once!
+        update_fields = []
+        update_values = []
+
+        if username:
+            update_fields.append("username = %s")
+            update_values.append(username)
+        if full_name:
+            update_fields.append("full_name = %s")
+            update_values.append(full_name)
+        if role:
+            update_fields.append("role = %s")
+            update_values.append(role)
+        if branch_id:
+            update_fields.append("branch_id = %s")
+            update_values.append(branch_id)
+        if is_active is not None:  # is_active could be False, so we check 'is not None'
+            update_fields.append("is_active = %s")
+            update_values.append(is_active)
+        if password:
+            hashed_pwd = bcrypt.generate_password_hash(password).decode('utf-8')
+            update_fields.append("password_hash = %s")
+            update_values.append(hashed_pwd)
+
+        if not update_fields:
+            return jsonify({"message": "No valid fields provided to update."}), 400
+
+        # Add the target_user_id to the very end of our values list for the WHERE clause
+        update_values.append(target_user_id)
+
+        # Assemble the final SQL string
+        sql = f"UPDATE USERS SET {', '.join(update_fields)} WHERE user_id = %s"
+        
+        cur.execute(sql, tuple(update_values))
         mysql.connection.commit()
-        return jsonify({"message": f"Password for User ID {target_user_id} updated successfully"}), 200
+
+        return jsonify({"message": f"User ID {target_user_id} updated successfully!"}), 200
 
     except Exception as e:
         mysql.connection.rollback()
         return jsonify({"error": str(e)}), 500
     finally:
         cur.close()
+
 #---------------PRODUCTS---------------------------------------------------------
 
 @app.route('/products', methods=['GET'])
