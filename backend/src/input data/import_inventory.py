@@ -3,19 +3,22 @@ import mysql.connector
 from mysql.connector import Error
 from datetime import datetime
 import time
+import os
 
 # ==========================================
 # 1. DATABASE CONFIGURATION
 # ==========================================
 DB_CONFIG = {
-    'host': 'localhost',
+    'host': 'turntable.proxy.rlwy.net',
+    'port': 30250,
     'user': 'root',
-    'password': '', 
+    'password': 'uLAhjyGhrysHRAQzKTnfvxKsXiCeQuOm', 
     'database': 'Knopper_Database',
     'connection_timeout': 30  # Don't wait forever if DB is locked
 }
 
-CSV_FILE = 'Knopper_DBv2.csv'
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CSV_FILE = os.path.join(BASE_DIR, 'Knopper_DBv2.csv')
 TARGET_BRANCH_ID = 1 
     
 # ==========================================
