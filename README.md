@@ -4,8 +4,9 @@ This repository contains the backend and frontend systems for the Knopper Pharma
 
 ## Recent Updates
 
-- **Assets Migration**: Created `backend/src` to store core project assets.
-- **Database Assets**: Added `Knopper_DB.csv` and `Knopper_DBv2.csv` for inventory management.
-- **Inventory Scripts**: Included `import_inventory.py` to handle data processing and database population.
-- **Repository Access**: Successfully configured collaborator permissions for **Nyaeko-san** and pushed the updated structure.
+- **Security & Auth**: Implemented JWT authentication and Role-Based Access Control (RBAC) in `app.py`.
+- **User Management**: Added routes for user creation, login, and secure password updates.
+- **Database Schema**: Added `knopper_database_v1 (1).sql` containing the initial system architecture.
+- **Assets Migration**: Created `backend/src` to store core project assets (CSVs and Import Scripts).
+- **Repository Access**: Fully configured for **Nyaeko-san** with accurate commit history and contributor details.
 
