@@ -31,11 +31,11 @@ jwt = JWTManager(app)
 @app.route('/create-user', methods=['POST'])
 @jwt_required()
 def create_user():
-    # --- GET ROLE OF CURRENT USER ---
+    # --- 1. GET ROLE OF CURRENT USER ---
     claims = get_jwt()
     current_role = claims['role']
 
-    # --- GET DATA FROM POSTMAN ---
+    # --- 2. GET DATA FROM POSTMAN ---
     data = request.json
     target_role = data.get('role')
     u_id = data.get('user_id')
@@ -44,14 +44,13 @@ def create_user():
     fname = data.get('full_name')
     pwd = data.get('password')
 
-    # 1. STRICT VALIDATION: Check for missing or empty fields
-    # If any of these are missing, it immediately stops and warns the user.
+    # --- 3. STRICT VALIDATION: Check for missing or empty fields ---
     if not all([u_id, b_id, uname, fname, pwd, target_role]):
         return jsonify({
             "message": "Validation Error: All fields (user_id, branch_id, username, password, full_name, role) are required and cannot be empty."
         }), 400
 
-    # 2. ROLE LOGIC
+    # --- 4. ROLE LOGIC ---
     if current_role == 'staff':
         return jsonify({"message": "Access Denied: Staff cannot create accounts"}), 403
     
@@ -60,37 +59,43 @@ def create_user():
 
     cur = mysql.connection.cursor()
     try:
-        # 3. DUPLICATE CHECK: Look for existing ID, Username, or Full Name
+        # --- 5. DUPLICATE CHECK: Look for existing ID, Username, or Name IN THE SAME BRANCH ---
         cur.execute("""
-            SELECT user_id, username, full_name 
+            SELECT user_id, username, full_name, branch_id 
             FROM USERS 
-            WHERE user_id = %s OR username = %s OR full_name = %s
-        """, (u_id, uname, fname))
+            WHERE user_id = %s 
+               OR username = %s 
+               OR (full_name = %s AND branch_id = %s)
+        """, (u_id, uname, fname, b_id))
         
         existing_user = cur.fetchone()
         
-        # If a match is found, tell the user exactly what the duplicate is
+        # If a match is found, check exactly what triggered it
         if existing_user:
             if existing_user[0] == int(u_id):
                 return jsonify({"message": f"Conflict: The user_id '{u_id}' is already in use."}), 409
+            
             if existing_user[1] == uname:
-                return jsonify({"message": f"Conflict: The username '{uname}' is already taken."}), 409
-            if existing_user[2] == fname:
-                return jsonify({"message": f"Conflict: The full name '{fname}' is already registered."}), 409
+                return jsonify({"message": f"Conflict: The username '{uname}' is already taken. Please choose another."}), 409
+            
+            # Check if the name AND the branch match
+            if existing_user[2] == fname and existing_user[3] == int(b_id):
+                return jsonify({"message": f"Conflict: '{fname}' is already registered at Branch {b_id}."}), 409
 
-        # 4. HASH PASSWORD & INSERT TO DATABASE
+        # --- 6. HASH PASSWORD & INSERT TO DATABASE ---
         hashed_pwd = bcrypt.generate_password_hash(pwd).decode('utf-8')
 
+        # Added 'is_active' and 'TRUE' to the SQL command
         cur.execute("""
-            INSERT INTO USERS (user_id, branch_id, username, password_hash, full_name, role)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO USERS (user_id, branch_id, username, password_hash, full_name, role, is_active)
+            VALUES (%s, %s, %s, %s, %s, %s, TRUE)
         """, (u_id, b_id, uname, hashed_pwd, fname, target_role))
         
         mysql.connection.commit()
         return jsonify({"message": f"User {uname} created successfully!"}), 201
 
     except Exception as e:
-        mysql.connection.rollback() # Undo any broken database actions
+        mysql.connection.rollback() # Undo any broken database actions to prevent corruption
         return jsonify({"error": str(e)}), 500
     finally:
         cur.close()
