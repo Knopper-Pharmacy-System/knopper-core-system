@@ -110,11 +110,18 @@ def login():
     password = data.get('password')
 
     cur = mysql.connection.cursor()
-    cur.execute("SELECT user_id, password_hash, role, branch_id FROM USERS WHERE username = %s", (username,))
+    # 1. NEW: Added 'is_active' to the end of the SELECT query
+    cur.execute("SELECT user_id, password_hash, role, branch_id, is_active FROM USERS WHERE username = %s", (username,))
     user = cur.fetchone()
     cur.close()
 
     if user and bcrypt.check_password_hash(user[1], password):
+        
+        # 2. NEW: Check if the account is active before letting them in!
+        # user[4] corresponds to the 'is_active' column we just added to the query
+        if not user[4]: 
+            return jsonify({"message": "Account is inactive. Please contact your administrator."}), 403
+
         # --- FIX START ---
         # 1. Identity MUST be a string (User ID)
         identity = str(user[0]) 
