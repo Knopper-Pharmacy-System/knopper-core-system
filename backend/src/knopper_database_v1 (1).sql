@@ -1,6 +1,6 @@
 create database Knopper_Database;
 use Knopper_Database;
-show databases;
+-- show databases;
 
 
 SET FOREIGN_KEY_CHECKS = 0;
@@ -311,3 +311,74 @@ CREATE TABLE RETURN_ITEMS (
 
 
 SET FOREIGN_KEY_CHECKS = 1;
+
+select * from PRODUCTS;
+
+SELECT 
+    p.product_id AS 'Id',
+    
+    -- 1. Barcode
+    pb.barcode_value AS 'Barcode',
+    
+    -- 2. "Unnamed: 2" (Original Description)
+    -- Note: Since the import script mapped 'Generic' to product_name_official, 
+    -- we display that here. If you concatenated name+dosage, use that.
+    p.product_name_official AS 'Description',
+    
+    -- 3. Generic Name
+    COALESCE(m.generic_name, p.product_name_official) AS 'Generic',
+    
+    -- 4. Classification (Mapped back to string roughly)
+    CASE p.category_type
+        WHEN 'MEDICINE' THEN 'MEDICAL/MEDICINES SUPPLIES'
+        WHEN 'GROCERY' THEN 'GROCERIES SUPPLIES'
+        ELSE 'EQUIPMENT'
+    END AS 'Classification',
+    
+    -- 5. Gondola
+    g.gondola_code AS 'Gondola',
+    
+    -- 6. Supplier
+    s.supplier_name AS 'Supplier',
+    
+    -- 7. Pack/Unit Size
+    COALESCE(m.dosage, gro.weight_volume, 'Unit') AS 'Pack/Unit Size (Measure)',
+    
+    -- 8. Net Weight (This was empty in source, returning NULL)
+
+    
+    -- 9. Unit Cost
+    psl.cost_per_unit AS 'UnitCost',
+    
+    -- 10. Expiration (Formatted MM/DD/YYYY)
+    DATE_FORMAT(bi.expiry_date, '%m/%d/%Y') AS 'Expiration',
+    
+    -- 11. Lot Number
+    bi.batch_number AS 'LotNumber',
+    
+    -- 12. Reorder Point
+    bi.reorder_level AS 'Reorder Point',
+    
+    -- 13. Prices
+    p.price_regular AS 'Regular Price',
+    p.price_senior_pwd AS 'Senior/PWD Price',
+    p.price_box_wholesale AS 'Wholesale Box Price'
+
+FROM PRODUCTS p
+
+-- Join Inventory for Branch 1 (BMC MAIN)
+LEFT JOIN BRANCH_INVENTORY bi ON p.product_id = bi.product_id AND bi.branch_id = 1
+
+-- Join Location
+LEFT JOIN GONDOLAS g ON bi.gondola_id = g.gondola_id
+
+-- Join Barcode (Primary)
+LEFT JOIN PRODUCT_BARCODES pb ON p.product_id = pb.product_id AND pb.is_primary = TRUE
+
+-- Join Specific Details
+LEFT JOIN MEDICINES m ON p.product_id = m.product_id
+LEFT JOIN GROCERIES gro ON p.product_id = gro.product_id
+
+-- Join Supplier Data
+LEFT JOIN PRODUCT_SUPPLIER_LINK psl ON p.product_id = psl.product_id
+LEFT JOIN SUPPLIERS s ON psl.supplier_id = s.supplier_id;
