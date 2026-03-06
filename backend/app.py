@@ -5,18 +5,16 @@ from flask_bcrypt import Bcrypt
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity, get_jwt
 from datetime import timedelta
 
-# --- NEW: Load the .env file ---
 from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
 
-# --- Configuration (Now Secure!) ---
 app.config['MYSQL_HOST'] = os.getenv('DB_HOST')
 app.config['MYSQL_USER'] = os.getenv('DB_USER')
 app.config['MYSQL_PASSWORD'] = os.getenv('DB_PASSWORD') 
 app.config['MYSQL_DB'] = os.getenv('DB_NAME')
-app.config['MYSQL_PORT'] = int(os.getenv('DB_PORT')) # Ports must be integers
+app.config['MYSQL_PORT'] = int(os.getenv('DB_PORT')) 
 
 app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET') 
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=12)
@@ -25,9 +23,7 @@ mysql = MySQL(app)
 bcrypt = Bcrypt(app)
 jwt = JWTManager(app)
 
-# ==========================================
-# ROUTE: CREATE USER (RBAC Enabled)
-# ==========================================
+# ROUTE: CREATE USER 
 @app.route('/create-user', methods=['POST'])
 @jwt_required()
 def create_user():
@@ -95,14 +91,12 @@ def create_user():
         return jsonify({"message": f"User {uname} created successfully!"}), 201
 
     except Exception as e:
-        mysql.connection.rollback() # Undo any broken database actions to prevent corruption
+        mysql.connection.rollback() 
         return jsonify({"error": str(e)}), 500
     finally:
         cur.close()
 
-# ==========================================
-# ROUTE: LOGIN (FIXED)
-# ==========================================
+# ROUTE: LOGIN
 @app.route('/login', methods=['POST'])
 def login():
     data = request.json
@@ -110,39 +104,31 @@ def login():
     password = data.get('password')
 
     cur = mysql.connection.cursor()
-    # 1. NEW: Added 'is_active' to the end of the SELECT query
     cur.execute("SELECT user_id, password_hash, role, branch_id, is_active FROM USERS WHERE username = %s", (username,))
     user = cur.fetchone()
     cur.close()
 
     if user and bcrypt.check_password_hash(user[1], password):
         
-        # 2. NEW: Check if the account is active before letting them in!
-        # user[4] corresponds to the 'is_active' column we just added to the query
         if not user[4]: 
             return jsonify({"message": "Account is inactive. Please contact your administrator."}), 403
 
-        # --- FIX START ---
-        # 1. Identity MUST be a string (User ID)
         identity = str(user[0]) 
         
-        # 2. Store Role and Branch in 'additional_claims'
         claims = {
             "role": user[2],
             "branch": user[3]
         }
         
-        # Create the token correctly
         token = create_access_token(identity=identity, additional_claims=claims)
-        # --- FIX END ---
+     
         
         return jsonify({"access_token": token, "role": user[2]}), 200
     
     return jsonify({"message": "Invalid Credentials"}), 401
 
-# ==========================================
-# ROUTE: SETUP ADMIN (Protected by Header Key)
-# ==========================================
+# ROUTE: SETUP ADMIN 
+
 @app.route('/setup-admin', methods=['POST'])
 def setup_admin():
     # 1. SECURITY CHECK: Check for the secret header
@@ -177,14 +163,13 @@ def setup_admin():
 @app.route('/users', methods=['GET'])
 @jwt_required()
 def get_all_users():
-    # Optional: Check if the requester is an Admin/Manager if you want to restrict this
-    # claims = get_jwt()
-    # if claims['role'] not in ['admin', 'manager']:
-    #     return jsonify({"message": "Access Denied"}), 403
+    # Check if the requester is an Admin/Manager if you want to restrict this
+    claims = get_jwt()
+    if claims['role'] not in ['admin', 'manager']:
+        return jsonify({"message": "Access Denied"}), 403
 
     cur = mysql.connection.cursor()
     try:
-        # We join with BRANCHES so we see "BMC Main" instead of just "1"
         sql = """
             SELECT u.user_id, u.username, u.full_name, u.role, b.branch_name, u.is_active 
             FROM USERS u
@@ -194,7 +179,6 @@ def get_all_users():
         cur.execute(sql)
         users = cur.fetchall()
 
-        # Convert the list of tuples into a clean JSON list
         user_list = []
         for user in users:
             user_list.append({
@@ -220,7 +204,6 @@ def edit_user(target_user_id):
     if claims.get('role') != 'admin':
         return jsonify({"message": "Access Denied: Only Administrators can edit user profiles."}), 403
 
-    # 2. Get Data from Postman payload
     data = request.json
     if not data:
         return jsonify({"message": "No data provided to update."}), 400
@@ -256,7 +239,6 @@ def edit_user(target_user_id):
                     return jsonify({"message": f"Conflict: '{full_name}' already exists in Branch {branch_id}."}), 409
 
         # 5. DYNAMICALLY BUILD THE UPDATE QUERY
-        # This allows you to update just one field, or all of them at once!
         update_fields = []
         update_values = []
 
@@ -300,15 +282,14 @@ def edit_user(target_user_id):
     finally:
         cur.close()
 
-#---------------PRODUCTS---------------------------------------------------------
+# ROUTE: For PRODUCTS
 
 @app.route('/products', methods=['GET'])
 @jwt_required()
 def get_all_products():
     cur = mysql.connection.cursor()
     try:
-        # NOTE: Adjust these column names if your table schema is different.
-        # I am using 'product_name_official' based on our previous database setup.
+      
         sql = """
             SELECT product_id, product_name_official 
             FROM PRODUCTS 
@@ -317,14 +298,13 @@ def get_all_products():
         cur.execute(sql)
         products = cur.fetchall()
 
-        # Convert the raw database rows into a clean JSON list
+       
         product_list = []
         for prod in products:
             product_list.append({
                 "product_id": prod[0],
                 "product_name_official": prod[1]
-                # You can add more fields here later (like category, price, etc.)
-                # e.g., "price": prod[2]
+                
             })
 
         return jsonify(product_list), 200
@@ -337,7 +317,7 @@ def get_all_products():
 
 
 
-#---------------INVENTORY---------------------------------------------------------
+# ROUTE: FOR INVENTORY
 @app.route('/inventory/branch/<int:branch_id>', methods=['GET'])
 @jwt_required()
 def get_branch_inventory(branch_id):
