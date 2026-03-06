@@ -3,8 +3,7 @@ from flask import Flask, request, jsonify
 from flask_mysqldb import MySQL
 from flask_bcrypt import Bcrypt
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity, get_jwt
-from datetime import timedelta
-
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -127,8 +126,7 @@ def login():
     
     return jsonify({"message": "Invalid Credentials"}), 401
 
-# ROUTE: SETUP ADMIN 
-
+#  SETUP ADMIN 
 @app.route('/setup-admin', methods=['POST'])
 def setup_admin():
     # 1. SECURITY CHECK: Check for the secret header
@@ -148,18 +146,19 @@ def setup_admin():
     cur = mysql.connection.cursor()
     try:
         cur.execute("""
-            INSERT INTO USERS (user_id, branch_id, username, password_hash, full_name, role)
-            VALUES (%s, %s, %s, %s, %s, 'admin')
+            INSERT INTO USERS (user_id, branch_id, username, password_hash, full_name, role, is_active)
+            VALUES (%s, %s, %s, %s, %s, 'admin', TRUE)
         """, (data.get('user_id'), data.get('branch_id'), data.get('username'), hashed_pwd, data.get('full_name')))
         
         mysql.connection.commit()
-        return jsonify({"message": "Superadmin created successfully!"}), 201
+        return jsonify({"message": "Superadmin created and activated successfully!"}), 201
 
     except Exception as e:
+        mysql.connection.rollback()
         return jsonify({"error": str(e)}), 500
     finally:
         cur.close()
-
+# GET ALL USERS
 @app.route('/users', methods=['GET'])
 @jwt_required()
 def get_all_users():
@@ -195,7 +194,7 @@ def get_all_users():
         return jsonify({"error": str(e)}), 500
     finally:
         cur.close()
-
+# UPDATE USER
 @app.route('/update-users/<int:target_user_id>', methods=['PUT'])
 @jwt_required()
 def edit_user(target_user_id):
@@ -282,9 +281,10 @@ def edit_user(target_user_id):
     finally:
         cur.close()
 
-# ROUTE: For PRODUCTS
+# ROUTE: For PRODUCTS-----------------------------------------
 
-@app.route('/products', methods=['GET'])
+# GET ALL PRODUCTS
+@app.route('/get-all-products', methods=['GET'])
 @jwt_required()
 def get_all_products():
     cur = mysql.connection.cursor()
@@ -314,10 +314,9 @@ def get_all_products():
     finally:
         cur.close()
 
-
-
-
 # ROUTE: FOR INVENTORY
+
+#get all inventory
 @app.route('/inventory/branch/<int:branch_id>', methods=['GET'])
 @jwt_required()
 def get_branch_inventory(branch_id):
@@ -362,63 +361,350 @@ def get_branch_inventory(branch_id):
     finally:
         cur.close()
 
-@app.route('/inventory/receive', methods=['POST'])
+
+# ROUTE: ADD PRODUCT TO SHELF	
+@app.route('/inventory/add-products', methods=['POST'])
 @jwt_required()
-def receive_inventory():
-    # 1. Get the Identity of the person receiving the stock
+def add_product_to_shelf():
+    current_user_id = get_jwt_identity() 
     claims = get_jwt()
-    current_role = claims['role']
-    
-    # Optional: Restrict to managers and admins
-    if current_role == 'staff':
-        return jsonify({"message": "Access Denied: Only Managers/Admins can receive inventory"}), 403
+    current_branch_id = claims['branch'] 
 
-    # 2. Get Data from Postman payload
     data = request.json
-    
-    inventory_id = data.get('inventory_id') # Manual ID based on your schema
-    branch_id = data.get('branch_id')
     product_id = data.get('product_id')
-    gondola_id = data.get('gondola_id') # Shelf location
+    gondola_code = data.get('gondola_code')
     batch_number = data.get('batch_number')
-    expiry_date = data.get('expiry_date') # Format: YYYY-MM-DD
-    quantity = data.get('quantity_on_hand')
-    reorder_level = data.get('reorder_level', 5) # Default to 5 if not provided
-    target_stock = data.get('target_stock_level', 100) # Default to 100 if not provided
+    expiry_date = data.get('expiry_date')
+    quantity = data.get('quantity')
 
-    # Basic Validation
-    if not all([inventory_id, branch_id, product_id, batch_number, expiry_date, quantity]):
-        return jsonify({"message": "Missing required fields (inventory_id, branch_id, product_id, batch_number, expiry_date, quantity_on_hand)"}), 400
+    if not all([product_id, gondola_code, batch_number, expiry_date, quantity]):
+        return jsonify({"message": "Missing required fields"}), 400
 
     cur = mysql.connection.cursor()
-    
     try:
-        # 3. Insert the new batch into BRANCH_INVENTORY
+        cur.execute("SELECT gondola_id FROM GONDOLAS WHERE gondola_code = %s AND branch_id = %s", (gondola_code, current_branch_id))
+        gondola = cur.fetchone()
+        if not gondola:
+            return jsonify({"message": f"Gondola '{gondola_code}' not found."}), 404
+        gondola_id = gondola[0]
+
+        # INSERT INTO INVENTORY
         sql_insert = """
             INSERT INTO BRANCH_INVENTORY 
-            (inventory_id, branch_id, product_id, gondola_id, reorder_level, target_stock_level, batch_number, expiry_date, quantity_on_hand)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            (branch_id, product_id, gondola_id, reorder_level, target_stock_level, batch_number, expiry_date, quantity_on_hand)
+            VALUES (%s, %s, %s, 10, 100, %s, %s, %s)
         """
-        cur.execute(sql_insert, (inventory_id, branch_id, product_id, gondola_id, reorder_level, target_stock, batch_number, expiry_date, quantity))
+        cur.execute(sql_insert, (current_branch_id, product_id, gondola_id, batch_number, expiry_date, quantity))
         
-        # 4. (Optional but recommended) Update the Global Product total_stock_quantity
-        sql_update_global = """
-            UPDATE PRODUCTS 
-            SET total_stock_quantity = IFNULL(total_stock_quantity, 0) + %s 
-            WHERE product_id = %s
+        # Get the ID of the new inventory record to link the adjustment
+        inventory_id = cur.lastrowid
+
+        # LOG THE AUDIT TRAIL (STOCK ADJUSTMENT)
+        sql_audit = """
+            INSERT INTO STOCK_ADJUSTMENTS (inventory_id, user_id, adjustment_type, quantity_adjusted, date_adjusted, remarks)
+            VALUES (%s, %s, 'STOCK_IN', %s, %s, %s)
         """
-        cur.execute(sql_update_global, (quantity, product_id))
+        remarks = f"add supply in gandola {gondola_code}"
+        cur.execute(sql_audit, (inventory_id, current_user_id, quantity, datetime.now(), remarks))
+
+        # 3. Update Global Total
+        cur.execute("UPDATE PRODUCTS SET total_stock_quantity = IFNULL(total_stock_quantity, 0) + %s WHERE product_id = %s", (quantity, product_id))
 
         mysql.connection.commit()
-        return jsonify({"message": f"Successfully received {quantity} units of Product {product_id} into Branch {branch_id}."}), 201
-
+        return jsonify({"message": f"Product added to gondola '{gondola_code}'."}), 201
     except Exception as e:
-        # If there's a Foreign Key error (e.g., product doesn't exist), it will be caught here
-        mysql.connection.rollback() 
+        mysql.connection.rollback()
         return jsonify({"error": str(e)}), 500
     finally:
         cur.close()
 
+#get all products in a specific gondola
+@app.route('/inventory/gondola/<string:gondola_code>', methods=['GET'])
+@jwt_required()
+def get_gondola_inventory(gondola_code):
+    
+    claims = get_jwt()
+    current_branch_id = claims['branch']
+
+    cur = mysql.connection.cursor()
+    try:
+        
+        sql = """
+            SELECT 
+                bi.inventory_id,
+                p.product_id,
+                p.product_name_official,
+                p.category_type,
+                bi.batch_number,
+                bi.expiry_date,
+                bi.quantity_on_hand
+            FROM BRANCH_INVENTORY bi
+            JOIN PRODUCTS p ON bi.product_id = p.product_id
+            JOIN GONDOLAS g ON bi.gondola_id = g.gondola_id
+            WHERE g.gondola_code = %s AND bi.branch_id = %s
+            ORDER BY p.product_name_official ASC, bi.expiry_date ASC
+        """
+        
+        cur.execute(sql, (gondola_code, current_branch_id))
+        items = cur.fetchall()
+
+        if not items:
+            return jsonify({"message": f"No products found in gondola '{gondola_code}' at your branch."}), 404
+
+        gondola_stock = []
+        for item in items:
+            gondola_stock.append({
+                "inventory_id": item[0],
+                "product_id": item[1],
+                "product_name": item[2],
+                "category": item[3],
+                "batch_number": item[4],
+                "expiry_date": item[5].strftime('%Y-%m-%d') if item[5] else None,
+                "quantity_on_hand": item[6]
+            })
+
+        return jsonify(gondola_stock), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+
+#  Remove PRODUCT
+@app.route('/inventory/remove-expired', methods=['POST'])
+@jwt_required()
+def remove_expired_stock():
+    current_user_id = get_jwt_identity()
+    claims = get_jwt()
+    current_branch_id = claims['branch']
+
+    data = request.json
+    product_id = data.get('product_id')
+    gondola_code = data.get('gondola_code')
+    quantity_to_remove = data.get('quantity')
+
+    if not all([product_id, gondola_code, quantity_to_remove]) or quantity_to_remove <= 0:
+        return jsonify({"message": "Missing fields or invalid quantity."}), 400
+
+    cur = mysql.connection.cursor()
+    try:
+        sql_find = """
+            SELECT bi.inventory_id, bi.quantity_on_hand, bi.batch_number
+            FROM BRANCH_INVENTORY bi
+            JOIN GONDOLAS g ON bi.gondola_id = g.gondola_id
+            WHERE bi.product_id = %s AND g.gondola_code = %s AND bi.branch_id = %s
+            ORDER BY bi.expiry_date ASC LIMIT 1
+        """
+        cur.execute(sql_find, (product_id, gondola_code, current_branch_id))
+        item = cur.fetchone()
+        
+        if not item:
+            return jsonify({"message": "Product not found."}), 404
+            
+        inventory_id, current_qty, batch_num = item[0], item[1], item[2]
+
+        if quantity_to_remove > current_qty:
+            return jsonify({"message": "Insufficient stock."}), 400
+
+        # LOG THE AUDIT TRAIL (STOCK ADJUSTMENT)
+        sql_audit = """
+            INSERT INTO STOCK_ADJUSTMENTS (inventory_id, user_id, adjustment_type, quantity_adjusted, date_adjusted, remarks)
+            VALUES (%s, %s, 'DISPOSAL', %s, %s, %s)
+        """
+        remarks = f"Expired stock removed from {gondola_code} (Batch: {batch_num})"
+        cur.execute(sql_audit, (inventory_id, current_user_id, quantity_to_remove, datetime.now(), remarks))
+
+        # UPDATE INVENTORY
+        new_qty = current_qty - quantity_to_remove
+        if new_qty > 0:
+            cur.execute("UPDATE BRANCH_INVENTORY SET quantity_on_hand = %s WHERE inventory_id = %s", (new_qty, inventory_id))
+        else:
+            cur.execute("DELETE FROM BRANCH_INVENTORY WHERE inventory_id = %s", (inventory_id,))
+
+        #  Update Global Total
+        cur.execute("UPDATE PRODUCTS SET total_stock_quantity = total_stock_quantity - %s WHERE product_id = %s", (quantity_to_remove, product_id))
+
+        mysql.connection.commit()
+        return jsonify({"message": f"Stock removed and logged as Disposal."}), 200
+    except Exception as e:
+        mysql.connection.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+
+#  SEARCH PRODUCT BY NAME
+#http://127.0.0.1:5000/inventory/search?name=name of product 
+@app.route('/inventory/search', methods=['GET'])
+@jwt_required()
+def search_product():
+    claims = get_jwt()
+    current_branch_id = claims['branch']
+    
+    # Get the search term from the URL parameter (e.g., /search?name=paracetamol)
+    search_query = request.args.get('name', '')
+
+    if not search_query:
+        return jsonify({"message": "Please provide a product name to search for."}), 400
+
+    cur = mysql.connection.cursor()
+    try:
+    
+        sql = """
+            SELECT 
+                p.product_id,
+                p.product_name_official, 
+                bi.batch_number, 
+                bi.expiry_date, 
+                bi.quantity_on_hand, 
+                g.gondola_code
+            FROM BRANCH_INVENTORY bi
+            JOIN PRODUCTS p ON bi.product_id = p.product_id
+            JOIN GONDOLAS g ON bi.gondola_id = g.gondola_id
+            WHERE bi.branch_id = %s 
+              AND p.product_name_official LIKE %s
+            ORDER BY p.product_name_official ASC, bi.expiry_date ASC
+        """
+        like_pattern = f"%{search_query}%"
+        cur.execute(sql, (current_branch_id, like_pattern))
+        results = cur.fetchall()
+
+        if not results:
+            return jsonify({"message": f"No products matching '{search_query}' found in your branch."}), 404
+
+        # 3. Format the results
+        search_results = []
+        for row in results:
+            search_results.append({
+                "product_id": row[0],
+                "product_name": row[1],
+                "batch_number": row[2],
+                "expiry_date": row[3].strftime('%Y-%m-%d') if row[3] else None,
+                "quantity": row[4],
+                "location": row[5]
+            })
+
+        return jsonify({
+            "search_term": search_query,
+            "results_found": len(search_results),
+            "items": search_results
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+
+# GET NEAR EXPIRY PRODUCTS near30 days
+
+@app.route('/inventory/near-expiry', methods=['GET'])
+@jwt_required()
+def get_near_expiry():
+    claims = get_jwt()
+    current_branch_id = claims['branch']
+
+    today = datetime.now().date()
+    threshold_date = today + timedelta(days=30)
+
+    cur = mysql.connection.cursor()
+    try:
+
+        sql = """
+            SELECT 
+                p.product_name_official, 
+                bi.batch_number, 
+                bi.expiry_date, 
+                bi.quantity_on_hand, 
+                g.gondola_code
+            FROM BRANCH_INVENTORY bi
+            JOIN PRODUCTS p ON bi.product_id = p.product_id
+            JOIN GONDOLAS g ON bi.gondola_id = g.gondola_id
+            WHERE bi.branch_id = %s 
+              AND bi.expiry_date <= %s
+            ORDER BY bi.expiry_date ASC
+        """
+        cur.execute(sql, (current_branch_id, threshold_date))
+        results = cur.fetchall()
+
+        expiry_list = []
+        for row in results:
+            expiry_date = row[2]
+            # Calculate status: Expired vs Expiring Soon
+            status = "EXPIRED" if expiry_date < today else "EXPIRING SOON"
+            
+            expiry_list.append({
+                "product_name": row[0],
+                "batch_number": row[1],
+                "expiry_date": expiry_date.strftime('%Y-%m-%d'),
+                "quantity": row[3],
+                "location": row[4],
+                "status": status
+            })
+
+        return jsonify({
+            "branch_id": current_branch_id,
+            "report_date": today.strftime('%Y-%m-%d'),
+            "total_count": len(expiry_list),
+            "items": expiry_list
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+
+
+# route for admmin monitoring -----------------
+# VIEW STOCK AUDIT LOG
+
+@app.route('/admin/audit-log/<int:branch_id>', methods=['GET'])
+@jwt_required()
+def get_audit_log(branch_id):
+    claims = get_jwt()
+    if claims.get('role') != 'admin':
+        return jsonify({"message": "Access Denied: Administrator privileges required"}), 403
+
+    cur = mysql.connection.cursor()
+    try:
+    
+        sql = """
+            SELECT 
+                sa.date_adjusted, 
+                u.full_name, 
+                p.product_name_official, 
+                sa.adjustment_type, 
+                sa.quantity_adjusted, 
+                sa.remarks
+            FROM STOCK_ADJUSTMENTS sa
+            JOIN USERS u ON sa.user_id = u.user_id
+            JOIN BRANCH_INVENTORY bi ON sa.inventory_id = bi.inventory_id
+            JOIN PRODUCTS p ON bi.product_id = p.product_id
+            WHERE bi.branch_id = %s
+            ORDER BY sa.date_adjusted DESC
+        """
+        cur.execute(sql, (branch_id,))
+        logs = cur.fetchall()
+
+        audit_trail = []
+        for log in logs:
+            audit_trail.append({
+                "date_time": log[0].strftime('%Y-%m-%d %H:%M:%S'),
+                "performed_by": log[1],
+                "product": log[2],
+                "action_type": log[3],
+                "quantity": log[4],
+                "details": log[5]
+            })
+
+        return jsonify({
+            "branch_id": branch_id,
+            "total_entries": len(audit_trail),
+            "logs": audit_trail
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
 
 if __name__ == '__main__':
     app.run(debug=True)
