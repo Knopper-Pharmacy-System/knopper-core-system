@@ -3,11 +3,14 @@ from flask import Flask, request, jsonify
 from flask_mysqldb import MySQL
 from flask_bcrypt import Bcrypt
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity, get_jwt
+from flask_cors import CORS
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
+
+CORS(app)
 
 app.config['MYSQL_HOST'] = os.getenv('DB_HOST')
 app.config['MYSQL_USER'] = os.getenv('DB_USER')
@@ -707,4 +710,4 @@ def get_audit_log(branch_id):
         cur.close()
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(port=5000, debug=True)
