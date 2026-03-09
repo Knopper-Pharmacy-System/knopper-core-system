@@ -1,6 +1,14 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { Eye, EyeOff, ChevronDown, LoaderCircle, LogIn } from "lucide-react";
+import {
+  Eye,
+  EyeOff,
+  ChevronDown,
+  LoaderCircle,
+  LogIn,
+  AlertCircle,
+  X,
+} from "lucide-react";
 import bannerLogo from "../../assets/banner_logo.png";
 import logoOutline from "../../assets/logo_outline.png";
 
@@ -14,9 +22,21 @@ const LoginPage = () => {
     username: "",
     password: "",
   });
-  const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState({
+    branch: false,
+    username: false,
+    password: false,
+  });
+  const [toast, setToast] = useState(null);
+  const toastTimerRef = useRef(null);
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+
+  const showToast = (message) => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToast(message);
+    toastTimerRef.current = setTimeout(() => setToast(null), 4500);
+  };
 
   useEffect(() => {
     const handleStatus = () => setIsOnline(navigator.onLine);
@@ -77,23 +97,35 @@ const LoginPage = () => {
   const handleChange = (e) => {
     const { name, value } = e.target;
     setCredentials((prev) => ({ ...prev, [name]: value }));
+    if (fieldErrors[name])
+      setFieldErrors((prev) => ({ ...prev, [name]: false }));
   };
 
   const handleLogin = (e) => {
     e.preventDefault();
-    setError("");
-    setIsLoading(true);
 
+    const errors = {
+      branch: !branch,
+      username: !credentials.username.trim(),
+      password: !credentials.password,
+    };
+    setFieldErrors(errors);
+
+    const missing = [];
+    if (errors.branch) missing.push("Branch");
+    if (errors.username) missing.push("User ID");
+    if (errors.password) missing.push("Password");
+
+    if (missing.length > 0) {
+      showToast(
+        `Required field${missing.length > 1 ? "s" : ""}: ${missing.join(", ")}`,
+      );
+      return;
+    }
+
+    setIsLoading(true);
     setTimeout(() => {
-      if (credentials.username && credentials.password) {
-        const mockRole = credentials.username.toLowerCase().includes("admin")
-          ? "admin"
-          : "cashier";
-        navigate("/auth/pos");
-      } else {
-        setError("Please enter both username and password.");
-        setIsLoading(false);
-      }
+      navigate("/auth/pos");
     }, 1000);
   };
 
@@ -102,6 +134,30 @@ const LoginPage = () => {
       className="bg-linear-to-b from-[#062d8c] from-59% to-[#3266e6] min-h-screen w-full flex flex-col overflow-x-hidden"
       data-name="newest login"
     >
+      <style>{`
+        @keyframes toastSlideIn {
+          from { transform: translateY(-16px); opacity: 0; }
+          to   { transform: translateY(0);    opacity: 1; }
+        }
+        .toast-enter { animation: toastSlideIn 0.3s cubic-bezier(0.16,1,0.3,1) forwards; }
+      `}</style>
+
+      {/* ── Modern Toast ── */}
+      {toast && (
+        <div className="toast-enter fixed top-6 left-1/2 -translate-x-1/2 z-50 flex items-start gap-3 bg-[#07184a]/90 backdrop-blur-xl border border-red-400/40 rounded-2xl shadow-[0_8px_40px_rgba(0,0,0,0.5)] px-5 py-4 min-w-72 max-w-sm">
+          <AlertCircle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+          <p className="text-white/90 text-sm font-medium flex-1 leading-snug">
+            {toast}
+          </p>
+          <button
+            type="button"
+            onClick={() => setToast(null)}
+            className="shrink-0 text-white/40 hover:text-white/90 transition-colors cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
       {/* ── Header ── */}
       <header className="flex items-center justify-between px-50 sm:px-6 lg:px-50 pt-14 pb-4 shrink-0">
         {/* Logo */}
@@ -176,16 +232,23 @@ const LoginPage = () => {
                   BRANCH:
                 </p>
                 {/* Dropdown */}
-                <div className="relative bg-[#f4f4f4] flex items-center gap-2 h-12 sm:h-14 px-4 rounded-2xl shadow-[0px_0px_40px_0px_rgba(3,31,99,0.25)] cursor-pointer w-70">
+                <div
+                  className={`relative bg-[#f4f4f4] flex items-center gap-2 h-12 sm:h-14 px-4 rounded-2xl shadow-[0px_0px_40px_0px_rgba(3,31,99,0.25)] cursor-pointer w-70 transition-shadow ${fieldErrors.branch ? "ring-2 ring-red-400" : ""}`}
+                >
                   <p
-                    className={`font-semibold text-base sm:text-lg lg:text-xl truncate flex-1 text-center ${branch ? "text-[#103182]" : "text-[#9ca3af]"}`}
+                    className={`font-semibold text-base sm:text-lg lg:text-xl truncate flex-1 text-center ${branch ? "text-[#103182]" : fieldErrors.branch ? "text-red-400" : "text-[#9ca3af]"}`}
                   >
                     {selectedBranch?.label ?? "Select Branch"}
                   </p>
-                  <ChevronDown className="text-[#103182] w-5 h-5 shrink-0" />
+                  <ChevronDown
+                    className={`w-5 h-5 shrink-0 ${fieldErrors.branch ? "text-red-400" : "text-[#103182]"}`}
+                  />
                   <select
                     value={branch}
-                    onChange={(e) => setBranch(e.target.value)}
+                    onChange={(e) => {
+                      setBranch(e.target.value);
+                      setFieldErrors((prev) => ({ ...prev, branch: false }));
+                    }}
                     className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                   >
                     <option value="" disabled>
@@ -203,10 +266,10 @@ const LoginPage = () => {
               {/* Right: branch name & address stacked */}
               <div className="col-span-2 flex flex-col gap-1 items-center text-center justify-self-center">
                 <p className="font-semibold text-[#b9e0ff] text-5xl sm:text-xl lg:text-5xl leading-tight">
-                  {selectedBranch?.label}
+                  {selectedBranch?.label || "NO BRANCH SELECTED"}
                 </p>
                 <p className="font-normal text-[#b9e0ff] text-xs sm:text-sm lg:text-base opacity-80">
-                  {selectedBranch?.address}
+                  {selectedBranch?.address || "Select a branch to continue"}
                 </p>
               </div>
             </div>
@@ -214,7 +277,7 @@ const LoginPage = () => {
             {/* Date / Time card */}
             <div className="relative bg-[#001445]/50 rounded-3xl border border-white/20 backdrop-blur-xl shadow-[0_8px_32px_0_rgba(0,20,69,0.6)] ring-1 ring-white/10 p-8 sm:p-10 lg:p-12 flex flex-col sm:flex-row gap-6 sm:gap-0 overflow-hidden">
               {/* Glass highlight overlay */}
-              <div className="absolute inset-0 bg-gradient-to-br from-white/10 via-transparent to-transparent pointer-events-none rounded-3xl" />
+              <div className="absolute inset-0 bg-linear-to-br from-white/10 via-transparent to-transparent pointer-events-none rounded-3xl" />
               {/* Date */}
               <div className="flex-1 flex flex-col gap-2">
                 <span className="font-semibold text-sm sm:text-base tracking-[2px] text-[rgba(190,140,0,0.85)]">
@@ -244,19 +307,14 @@ const LoginPage = () => {
 
         {/* ── Login Bar ── */}
         <div className="shrink-0 pb-15 sm:pb-19 lg:pb-25">
-          {/* Error */}
-          {error && (
-            <div className="mb-3 bg-red-100 border border-red-400 text-red-700 px-4 py-2 rounded text-sm text-center">
-              {error}
-            </div>
-          )}
-
           <form
             onSubmit={handleLogin}
             className="relative bg-[rgba(6,45,140,0.58)] rounded-3xl sm:rounded-4xl shadow-[0px_0px_30px_20px_rgba(6,45,140,0.71)] p-3 sm:p-4 flex flex-col sm:flex-row gap-3 sm:gap-3 items-stretch sm:items-center"
           >
             {/* User ID */}
-            <div className="flex items-center bg-[#edeaea] border border-black rounded-[16px] sm:rounded-[20px] shadow-[0px_0px_20px_2px_rgba(0,0,0,0.25)] h-21 sm:h-25 px-4 sm:px-6 gap-3 sm:gap-4 flex-1">
+            <div
+              className={`flex items-center bg-[#edeaea] rounded-2xl sm:rounded-[20px] shadow-[0px_0px_20px_2px_rgba(0,0,0,0.25)] h-21 sm:h-25 px-4 sm:px-6 gap-3 sm:gap-4 flex-1 transition-shadow border ${fieldErrors.username ? "border-red-400 ring-2 ring-red-400" : "border-black"}`}
+            >
               <span className="font-semibold text-[#001d63] text-base sm:text-lg whitespace-nowrap shrink-0">
                 USER ID:
               </span>
@@ -273,7 +331,9 @@ const LoginPage = () => {
             </div>
 
             {/* Password */}
-            <div className="flex items-center bg-[#edeaea] border border-black rounded-[16px] sm:rounded-[20px] shadow-[0px_0px_20px_2px_rgba(0,0,0,0.25)] h-21 sm:h-25 px-4 sm:px-6 gap-3 sm:gap-4 flex-1">
+            <div
+              className={`flex items-center bg-[#edeaea] rounded-2xl sm:rounded-[20px] shadow-[0px_0px_20px_2px_rgba(0,0,0,0.25)] h-21 sm:h-25 px-4 sm:px-6 gap-3 sm:gap-4 flex-1 transition-shadow border ${fieldErrors.password ? "border-red-400 ring-2 ring-red-400" : "border-black"}`}
+            >
               <span className="font-semibold text-[#001d63] text-base sm:text-lg whitespace-nowrap shrink-0">
                 PASSWORD:
               </span>
