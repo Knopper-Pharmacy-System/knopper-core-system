@@ -3,6 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { Eye, EyeOff, ChevronDown, LoaderCircle, LogIn, AlertCircle } from "lucide-react";
 import bannerLogo from "../../assets/banner_logo.png";
 import logoOutline from "../../assets/logo_outline.png";
+import { login } from "../../api/auth.js";
+import { useAuth } from "../../hooks/useAuth.js";
 
 const BRANCHES = [
   { value: "BMC MAIN", label: "BMC MAIN", address: "#6A J. Miranda Ave., Concepcion Pequeña, Naga City" },
@@ -12,6 +14,7 @@ const BRANCHES = [
 
 const LoginPage = () => {
   const navigate = useNavigate();
+  const { login: authLogin } = useAuth();
   
   // State
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -128,12 +131,31 @@ const LoginPage = () => {
     setIsLoading(true);
 
     try {
-      await new Promise((resolve) => setTimeout(resolve, 1200));
-      
-      const mockRole = credentials.username.toLowerCase().includes("admin") ? "admin" : "cashier";
-      navigate("/auth/pos");
+      const response = await login({
+        username: credentials.username.trim(),
+        password: credentials.password.trim(),
+      });
+
+      // Store token and role using auth hook
+      authLogin(response.access_token, response.role);
+
+      // Redirect based on role
+      switch (response.role) {
+        case "admin":
+          navigate("/admin/dashboard");
+          break;
+        case "manager":
+          navigate("/manager/dashboard");
+          break;
+        case "staff":
+          navigate("/pos");
+          break;
+        default:
+          navigate("/pos");
+      }
     } catch (err) {
-      setFieldErrors({ username: "", password: "Authentication failed. Please try again." });
+      const errorMessage = err.message || "Authentication failed. Please try again.";
+      setFieldErrors({ username: "", password: errorMessage });
     } finally {
       setIsLoading(false);
     }
