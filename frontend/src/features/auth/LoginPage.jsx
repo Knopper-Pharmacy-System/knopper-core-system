@@ -39,6 +39,15 @@ const LoginPage = () => {
   };
 
   useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     const handleStatus = () => setIsOnline(navigator.onLine);
     window.addEventListener("online", handleStatus);
     window.addEventListener("offline", handleStatus);
