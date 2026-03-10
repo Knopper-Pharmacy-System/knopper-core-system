@@ -1036,8 +1036,9 @@ def receive_delivery():
     current_user_id = int(get_jwt_identity())
     if claims['role'] not in ['admin', 'manager']:
         return jsonify({"message": "Access Denied"}), 403
-    data     = request.json
-    order_id = data.get('order_id')
+    data      = request.json
+    order_id  = data.get('order_id')
+    item_data = { i['po_item_id']: i for i in data.get('items', []) }
     if not order_id:
         return jsonify({"message": "Need: order_id"}), 400
     cur = mysql.connection.cursor()
@@ -1065,13 +1066,18 @@ def receive_delivery():
             VALUES (%s, %s, %s, NOW())
         """, (receipt_id, order_id, current_user_id))
         for item in items:
+            po_item_id = item[0]
+            quantity   = item[1]
+            override   = item_data.get(po_item_id, {})
+            batch      = override.get('batch', 'BATCH-001')
+            expiry     = override.get('expiry', None)
             receipt_item_id = next_id(cur, 'RECEIPT_ITEMS', 'receipt_item_id')
             cur.execute("""
                 INSERT INTO RECEIPT_ITEMS
                 (receipt_item_id, receipt_id, po_item_id, quantity_received, batch_number, expiry_date)
-                VALUES (%s, %s, %s, %s, 'BATCH-001', NULL)
-            """, (receipt_item_id, receipt_id, item[0], item[1]))
-            cur.execute("UPDATE PURCHASE_ORDER_ITEMS SET item_status='RECEIVED' WHERE po_item_id=%s", (item[0],))
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (receipt_item_id, receipt_id, po_item_id, quantity, batch, expiry))
+            cur.execute("UPDATE PURCHASE_ORDER_ITEMS SET item_status='RECEIVED' WHERE po_item_id=%s", (po_item_id,))
         cur.execute("UPDATE PURCHASE_ORDERS SET status='RECEIVED' WHERE order_id=%s", (order_id,))
         mysql.connection.commit()
         return jsonify({"message": f"Delivery recorded for PO {order_id}!"}), 201
