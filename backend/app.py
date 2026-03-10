@@ -1036,9 +1036,8 @@ def receive_delivery():
     current_user_id = int(get_jwt_identity())
     if claims['role'] not in ['admin', 'manager']:
         return jsonify({"message": "Access Denied"}), 403
-    data      = request.json
-    order_id  = data.get('order_id')
-    item_data = { i['po_item_id']: i for i in data.get('items', []) }
+    data     = request.json
+    order_id = data.get('order_id')
     if not order_id:
         return jsonify({"message": "Need: order_id"}), 400
     cur = mysql.connection.cursor()
@@ -1053,8 +1052,13 @@ def receive_delivery():
         if po[0] == 'RECEIVED':
             return jsonify({"message": "This PO has already been received!"}), 400
 
-        # Auto-fetch all items from the PO
-        cur.execute("SELECT po_item_id, quantity_ordered FROM PURCHASE_ORDER_ITEMS WHERE order_id=%s", (order_id,))
+        # Auto-fetch all items from the PO including product_id and branch_id
+        cur.execute("""
+            SELECT poi.po_item_id, poi.quantity_ordered, poi.product_id, po.branch_id
+            FROM PURCHASE_ORDER_ITEMS poi
+            JOIN PURCHASE_ORDERS po ON poi.order_id = po.order_id
+            WHERE poi.order_id = %s
+        """, (order_id,))
         items = cur.fetchall()
         if not items:
             return jsonify({"message": "No items found for this PO"}), 404
@@ -1066,11 +1070,19 @@ def receive_delivery():
             VALUES (%s, %s, %s, NOW())
         """, (receipt_id, order_id, current_user_id))
         for item in items:
-            po_item_id = item[0]
-            quantity   = item[1]
-            override   = item_data.get(po_item_id, {})
-            batch      = override.get('batch', 'BATCH-001')
-            expiry     = override.get('expiry', None)
+            po_item_id, quantity, product_id, branch_id = item
+
+            # Pull batch and expiry from BRANCH_INVENTORY
+            cur.execute("""
+                SELECT batch_number, expiry_date
+                FROM BRANCH_INVENTORY
+                WHERE product_id = %s AND branch_id = %s
+                LIMIT 1
+            """, (product_id, branch_id))
+            inv = cur.fetchone()
+            batch  = inv[0] if inv and inv[0] else None
+            expiry = inv[1] if inv and inv[1] else None
+
             receipt_item_id = next_id(cur, 'RECEIPT_ITEMS', 'receipt_item_id')
             cur.execute("""
                 INSERT INTO RECEIPT_ITEMS
