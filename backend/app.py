@@ -1126,18 +1126,31 @@ def create_transfer():
             VALUES (%s, %s, %s, %s, NOW(), 'IN_TRANSIT')
         """, (manifest_id, current_user_id, from_branch, to_branch))
         for item in items:
+            product_id = item.get('product_id')
+            quantity   = item.get('quantity')
+
+            # Auto-pull batch and expiry from BRANCH_INVENTORY
+            cur.execute("""
+                SELECT batch_number, expiry_date
+                FROM BRANCH_INVENTORY
+                WHERE product_id = %s AND branch_id = %s
+                LIMIT 1
+            """, (product_id, from_branch))
+            inv = cur.fetchone()
+            batch  = inv[0] if inv and inv[0] else None
+            expiry = inv[1] if inv and inv[1] else None
+
             transfer_item_id = next_id(cur, 'TRANSFER_ITEMS', 'transfer_item_id')
-            batch = item.get('batch', 'BATCH-001')
             cur.execute("""
                 INSERT INTO TRANSFER_ITEMS
                 (transfer_item_id, manifest_id, product_id, batch_number, quantity_sent, quantity_received)
                 VALUES (%s, %s, %s, %s, %s, 0)
-            """, (transfer_item_id, manifest_id, item.get('product_id'), batch, item.get('quantity')))
+            """, (transfer_item_id, manifest_id, product_id, batch, quantity))
             cur.execute("""
                 UPDATE BRANCH_INVENTORY
                 SET quantity_on_hand = quantity_on_hand - %s
                 WHERE product_id=%s AND branch_id=%s AND batch_number=%s
-            """, (item.get('quantity'), item.get('product_id'), from_branch, batch))
+            """, (quantity, product_id, from_branch, batch))
         mysql.connection.commit()
         return jsonify({"message": "Transfer created!", "manifest_id": manifest_id}), 201
     except Exception as e:
