@@ -4,17 +4,16 @@ import os
 from flask import Flask
 from datetime import timedelta
 from dotenv import load_dotenv
-
 from extensions import mysql, bcrypt, jwt
 from user import user_bp
 from inventory import inventory_bp
 from pos import pos_bp
 from procurement import procurement_bp
-
+from flask_cors import CORS
 load_dotenv()
 
 app = Flask(__name__)
-
+CORS(app)
 app.config['MYSQL_HOST'] = os.getenv('DB_HOST')
 app.config['MYSQL_USER'] = os.getenv('DB_USER')
 app.config['MYSQL_PASSWORD'] = os.getenv('DB_PASSWORD') 
