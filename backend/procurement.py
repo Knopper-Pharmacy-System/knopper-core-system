@@ -53,7 +53,6 @@ def get_purchase_orders():
         cur.close()
 
 
-
 # GET /procurement/<id> - Get PO details with items
 @procurement_bp.route('/procurement/<int:order_id>', methods=['GET'])
 @jwt_required()
@@ -63,7 +62,6 @@ def get_purchase_order(order_id):
         return jsonify({'message': 'Access Denied'}), 403
     cur = mysql.connection.cursor()
     try:
-        # Get PO Header
         cur.execute("""
             SELECT po.order_id, po.order_date, po.status, po.total_amount,
                    s.supplier_name, b.branch_name,
@@ -80,7 +78,6 @@ def get_purchase_order(order_id):
         if not po:
             return jsonify({'message': 'PO not found'}), 404
 
-        # Get PO Items
         cur.execute("""
             SELECT poi.po_item_id, p.product_name_official, 
                    poi.quantity_ordered, poi.uom, poi.cost_at_time_of_order, poi.item_status
@@ -115,7 +112,8 @@ def get_purchase_order(order_id):
     finally:
         cur.close()
 
-# POST /purchase-orders
+
+# POST /procurement
 # Send: supplier_id, branch_id, items[{product_id, quantity, cost}]
 @procurement_bp.route('/procurement', methods=['POST'])
 @jwt_required()
@@ -155,7 +153,7 @@ def create_purchase_order():
         cur.close()
 
 
-# PUT /purchase-orders/<id>
+# PUT /procurement/<id>
 # Send: status
 @procurement_bp.route('/procurement/<int:order_id>', methods=['PUT'])
 @jwt_required()
@@ -187,8 +185,8 @@ def update_purchase_order(order_id):
         cur.close()
 
 
-# POST /receiving
-# Send: order_id, items[{po_item_id, quantity, batch, expiry}]
+# POST /procurement/receive
+# Send: order_id
 @procurement_bp.route('/procurement/receive', methods=['POST'])
 @jwt_required()
 def receive_delivery():
@@ -202,7 +200,6 @@ def receive_delivery():
         return jsonify({"message": "Need: order_id"}), 400
     cur = mysql.connection.cursor()
     try:
-        # Check PO status first
         cur.execute("SELECT status FROM PURCHASE_ORDERS WHERE order_id=%s", (order_id,))
         po = cur.fetchone()
         if not po:
@@ -212,7 +209,6 @@ def receive_delivery():
         if po[0] == 'RECEIVED':
             return jsonify({"message": "This PO has already been received!"}), 400
 
-        # Auto-fetch all items from the PO including product_id and branch_id
         cur.execute("""
             SELECT poi.po_item_id, poi.quantity_ordered, poi.product_id, po.branch_id
             FROM PURCHASE_ORDER_ITEMS poi
@@ -229,10 +225,10 @@ def receive_delivery():
             (receipt_id, order_id, received_by_user_id, date_received)
             VALUES (%s, %s, %s, NOW())
         """, (receipt_id, order_id, current_user_id))
+
         for item in items:
             po_item_id, quantity, product_id, branch_id = item
 
-            # Pull batch and expiry from BRANCH_INVENTORY
             cur.execute("""
                 SELECT batch_number, expiry_date
                 FROM BRANCH_INVENTORY
@@ -250,6 +246,7 @@ def receive_delivery():
                 VALUES (%s, %s, %s, %s, %s, %s)
             """, (receipt_item_id, receipt_id, po_item_id, quantity, batch, expiry))
             cur.execute("UPDATE PURCHASE_ORDER_ITEMS SET item_status='RECEIVED' WHERE po_item_id=%s", (po_item_id,))
+
         cur.execute("UPDATE PURCHASE_ORDERS SET status='RECEIVED' WHERE order_id=%s", (order_id,))
         mysql.connection.commit()
         return jsonify({"message": f"Delivery recorded for PO {order_id}!"}), 201
@@ -260,8 +257,8 @@ def receive_delivery():
         cur.close()
 
 
-# POST /transfers
-# Send: from_branch_id, to_branch_id, items[{product_id, quantity, batch}]
+# POST /procurement/transfer
+# Send: from_branch_id, to_branch_id, items[{product_id, quantity}]
 @procurement_bp.route('/procurement/transfer', methods=['POST'])
 @jwt_required()
 def create_transfer():
@@ -285,20 +282,28 @@ def create_transfer():
             (manifest_id, user_id, from_branch_id, to_branch_id, date_departed, status)
             VALUES (%s, %s, %s, %s, NOW(), 'IN_TRANSIT')
         """, (manifest_id, current_user_id, from_branch, to_branch))
+
         for item in items:
             product_id = item.get('product_id')
             quantity   = item.get('quantity')
 
             # Auto-pull batch and expiry from BRANCH_INVENTORY
             cur.execute("""
-                SELECT batch_number, expiry_date
+                SELECT batch_number, expiry_date, inventory_id, quantity_on_hand
                 FROM BRANCH_INVENTORY
                 WHERE product_id = %s AND branch_id = %s
                 LIMIT 1
             """, (product_id, from_branch))
             inv = cur.fetchone()
-            batch  = inv[0] if inv and inv[0] else None
-            expiry = inv[1] if inv and inv[1] else None
+
+            # FIX: Check if product exists in source branch and has enough stock
+            if not inv:
+                raise Exception(f"Product {product_id} not found in source branch inventory.")
+            if inv[3] < quantity:
+                raise Exception(f"Insufficient stock for product {product_id}. Only {inv[3]} available.")
+
+            batch  = inv[0] if inv[0] else None
+            expiry = inv[1] if inv[1] else None
 
             transfer_item_id = next_id(cur, 'TRANSFER_ITEMS', 'transfer_item_id')
             cur.execute("""
@@ -306,11 +311,14 @@ def create_transfer():
                 (transfer_item_id, manifest_id, product_id, batch_number, quantity_sent, quantity_received)
                 VALUES (%s, %s, %s, %s, %s, 0)
             """, (transfer_item_id, manifest_id, product_id, batch, quantity))
+
+            # Deduct from source branch
             cur.execute("""
                 UPDATE BRANCH_INVENTORY
                 SET quantity_on_hand = quantity_on_hand - %s
-                WHERE product_id=%s AND branch_id=%s AND batch_number=%s
-            """, (quantity, product_id, from_branch, batch))
+                WHERE inventory_id = %s
+            """, (quantity, inv[2]))
+
         mysql.connection.commit()
         return jsonify({"message": "Transfer created!", "manifest_id": manifest_id}), 201
     except Exception as e:
@@ -318,8 +326,6 @@ def create_transfer():
         return jsonify({"error": str(e)}), 500
     finally:
         cur.close()
-
-
 
 
 # PUT /procurement/transfer/<manifest_id>/deliver
@@ -333,7 +339,6 @@ def confirm_transfer_delivery(manifest_id):
         return jsonify({"message": "Access Denied"}), 403
     cur = mysql.connection.cursor()
     try:
-        # Check manifest exists and is still IN_TRANSIT
         cur.execute("SELECT status, to_branch_id FROM TRANSFER_MANIFEST WHERE manifest_id=%s", (manifest_id,))
         manifest = cur.fetchone()
         if not manifest:
@@ -345,7 +350,6 @@ def confirm_transfer_delivery(manifest_id):
 
         to_branch = manifest[1]
 
-        # Fetch all transfer items
         cur.execute("""
             SELECT product_id, batch_number, quantity_sent
             FROM TRANSFER_ITEMS
@@ -358,18 +362,24 @@ def confirm_transfer_delivery(manifest_id):
         for item in items:
             product_id, batch_number, quantity_sent = item
 
-            # Update quantity_received in TRANSFER_ITEMS
             cur.execute("""
                 UPDATE TRANSFER_ITEMS
                 SET quantity_received = quantity_sent
                 WHERE manifest_id = %s AND product_id = %s
             """, (manifest_id, product_id))
 
-            # Add stock to receiving branch inventory
-            cur.execute("""
-                SELECT inventory_id FROM BRANCH_INVENTORY
-                WHERE branch_id = %s AND product_id = %s AND batch_number = %s
-            """, (to_branch, product_id, batch_number))
+            # FIX: Handle NULL batch_number properly — NULL = NULL is always false in MySQL
+            if batch_number is None:
+                cur.execute("""
+                    SELECT inventory_id FROM BRANCH_INVENTORY
+                    WHERE branch_id = %s AND product_id = %s AND batch_number IS NULL
+                """, (to_branch, product_id))
+            else:
+                cur.execute("""
+                    SELECT inventory_id FROM BRANCH_INVENTORY
+                    WHERE branch_id = %s AND product_id = %s AND batch_number = %s
+                """, (to_branch, product_id, batch_number))
+
             existing = cur.fetchone()
 
             if existing:
@@ -386,7 +396,6 @@ def confirm_transfer_delivery(manifest_id):
                     VALUES (%s, %s, %s, %s, %s)
                 """, (inventory_id, to_branch, product_id, batch_number, quantity_sent))
 
-        # Mark manifest as DELIVERED
         cur.execute("""
             UPDATE TRANSFER_MANIFEST
             SET status = 'DELIVERED', date_arrived = NOW()
