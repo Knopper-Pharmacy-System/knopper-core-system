@@ -111,16 +111,30 @@ def add_product_to_shelf():
             return jsonify({"message": f"Gondola '{gondola_code}' not found."}), 404
         gondola_id = gondola[0]
 
-        # INSERT INTO INVENTORY
-        sql_insert = """
-            INSERT INTO BRANCH_INVENTORY 
-            (branch_id, product_id, gondola_id, reorder_level, target_stock_level, batch_number, expiry_date, quantity_on_hand)
-            VALUES (%s, %s, %s, 10, 100, %s, %s, %s)
-        """
-        cur.execute(sql_insert, (current_branch_id, product_id, gondola_id, batch_number, expiry_date, quantity))
-        
-        # Get the ID of the new inventory record to link the adjustment
-        inventory_id = cur.lastrowid
+        # CHECK IF PRODUCT+BATCH ALREADY EXISTS — update instead of insert
+        cur.execute("""
+            SELECT inventory_id, quantity_on_hand 
+            FROM BRANCH_INVENTORY 
+            WHERE product_id = %s AND branch_id = %s AND batch_number = %s
+        """, (product_id, current_branch_id, batch_number))
+        existing = cur.fetchone()
+
+        if existing:
+            # Already exists — just add to the quantity
+            cur.execute("""
+                UPDATE BRANCH_INVENTORY 
+                SET quantity_on_hand = quantity_on_hand + %s
+                WHERE inventory_id = %s
+            """, (quantity, existing[0]))
+            inventory_id = existing[0]
+        else:
+            # Doesn't exist — create new row
+            cur.execute("""
+                INSERT INTO BRANCH_INVENTORY 
+                (branch_id, product_id, gondola_id, reorder_level, target_stock_level, batch_number, expiry_date, quantity_on_hand)
+                VALUES (%s, %s, %s, 10, 100, %s, %s, %s)
+            """, (current_branch_id, product_id, gondola_id, batch_number, expiry_date, quantity))
+            inventory_id = cur.lastrowid
 
         # LOG THE AUDIT TRAIL (STOCK ADJUSTMENT)
         sql_audit = """
