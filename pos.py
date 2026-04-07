@@ -985,14 +985,26 @@ def get_shift_sales(target_shift_id):
 @pos_bp.route('/pos/sales-report', methods=['GET'])
 @jwt_required()
 def get_sales_report():
+    import calendar
+
     claims = get_jwt()
     current_branch_id = claims['branch']
 
     if claims.get('role') not in ['admin', 'manager']:
         return jsonify({"message": "Access Denied."}), 403
 
-    date_from = request.args.get('date_from', datetime.now().strftime('%Y-%m-%d'))
-    date_to = request.args.get('date_to', datetime.now().strftime('%Y-%m-%d'))
+    today       = datetime.now()
+    month_param = request.args.get('month', today.strftime('%Y-%m'))
+
+    try:
+        target = datetime.strptime(month_param, '%Y-%m')
+    except ValueError:
+        return jsonify({"message": "Invalid month format. Use YYYY-MM (e.g. 2026-03)."}), 400
+
+    last_day  = calendar.monthrange(target.year, target.month)[1]
+    date_from = target.replace(day=1).strftime('%Y-%m-%d')
+    date_to   = target.replace(day=last_day).strftime('%Y-%m-%d')
+
     cashier_id_filter = request.args.get('cashier_id', None)
 
     cur = mysql.connection.cursor()
@@ -1033,10 +1045,10 @@ def get_sales_report():
                 sh.customer_type,
                 sh.payment_method
             FROM SALES_HEADERS sh
-            JOIN SALES_DETAILS sd  ON sh.sale_id      = sd.sale_id
-            JOIN USERS u           ON sh.user_id       = u.user_id
-            JOIN BRANCH_INVENTORY bi ON sd.inventory_id = bi.inventory_id
-            JOIN PRODUCTS p        ON bi.product_id    = p.product_id
+            JOIN SALES_DETAILS sd    ON sh.sale_id       = sd.sale_id
+            JOIN USERS u             ON sh.user_id        = u.user_id
+            JOIN BRANCH_INVENTORY bi ON sd.inventory_id  = bi.inventory_id
+            JOIN PRODUCTS p          ON bi.product_id     = p.product_id
             WHERE sh.branch_id = %s
               AND DATE(sh.sale_date) BETWEEN %s AND %s
               AND sh.customer_type != 'VOIDED'
@@ -1050,13 +1062,12 @@ def get_sales_report():
         line_items = []
         for row in rows:
             line_items.append(dict(zip(columns, [
-                str(val) if hasattr(val, 'strftime') else   # dates → string
+                str(val) if hasattr(val, 'strftime') else
                 round(float(val), 2) if isinstance(val, (int, float)) and not isinstance(val, bool) else
                 val
                 for val in row
             ])))
 
-        # Summary totals
         total_gross_sales  = sum(r['gross_sales']  for r in line_items)
         total_gross_cost   = sum(r['gross_cost']   for r in line_items)
         total_discount_amt = sum(r['discount_amt'] for r in line_items)
@@ -1065,17 +1076,18 @@ def get_sales_report():
         return jsonify({
             "status": "success",
             "filters": {
-                "branch_id":   current_branch_id,
-                "date_from":   date_from,
-                "date_to":     date_to,
-                "cashier_id":  cashier_id_filter
+                "branch_id":  current_branch_id,
+                "month":      month_param,
+                "date_from":  date_from,
+                "date_to":    date_to,
+                "cashier_id": cashier_id_filter
             },
             "totals": {
-                "total_line_items":    len(line_items),
-                "total_gross_sales":   round(total_gross_sales, 2),
-                "total_gross_cost":    round(total_gross_cost, 2),
-                "total_discount_amt":  round(total_discount_amt, 2),
-                "total_net_profit":    round(total_net_profit, 2),
+                "total_line_items":   len(line_items),
+                "total_gross_sales":  round(total_gross_sales, 2),
+                "total_gross_cost":   round(total_gross_cost, 2),
+                "total_discount_amt": round(total_discount_amt, 2),
+                "total_net_profit":   round(total_net_profit, 2),
             },
             "line_items": line_items
         }), 200
