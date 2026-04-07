@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
-from datetime import datetime
+from datetime import datetime,timedelta
 from extensions import mysql
 from extensions import mysql, bcrypt, jwt
 
@@ -1061,12 +1061,21 @@ def get_sales_report():
 
         line_items = []
         for row in rows:
-            line_items.append(dict(zip(columns, [
-                str(val) if hasattr(val, 'strftime') else
-                round(float(val), 2) if isinstance(val, (int, float)) and not isinstance(val, bool) else
-                val
-                for val in row
-            ])))
+            processed = []
+            for val in row:
+                if isinstance(val, timedelta):
+                    total_seconds = int(val.total_seconds())
+                    hours   = total_seconds // 3600
+                    minutes = (total_seconds % 3600) // 60
+                    seconds = total_seconds % 60
+                    processed.append(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
+                elif hasattr(val, 'strftime'):
+                    processed.append(str(val))
+                elif isinstance(val, (int, float)) and not isinstance(val, bool):
+                    processed.append(round(float(val), 2))
+                else:
+                    processed.append(val)
+            line_items.append(dict(zip(columns, processed)))
 
         total_gross_sales  = sum(r['gross_sales']  for r in line_items)
         total_gross_cost   = sum(r['gross_cost']   for r in line_items)
