@@ -1023,8 +1023,8 @@ def get_sales_report():
                 u.full_name                                                           AS cashier,
                 sh.trx_no,
                 sh.invoice_no,
-                p.product_id                                                          AS item_code,
-                p.product_name_receipt                                                AS description,
+                COALESCE(p.product_id, 'N/A')                                        AS item_code,
+                COALESCE(p.product_name_receipt, 'Unknown Item')                     AS description,
                 sd.price_at_sale                                                      AS selling_price,
                 sd.price_level,
                 sd.quantity_sold,
@@ -1045,13 +1045,13 @@ def get_sales_report():
                 sh.customer_type,
                 sh.payment_method
             FROM SALES_HEADERS sh
-            JOIN SALES_DETAILS sd    ON sh.sale_id       = sd.sale_id
-            JOIN USERS u             ON sh.user_id        = u.user_id
-            JOIN BRANCH_INVENTORY bi ON sd.inventory_id  = bi.inventory_id
-            JOIN PRODUCTS p          ON bi.product_id     = p.product_id
+            JOIN SALES_DETAILS sd         ON sh.sale_id      = sd.sale_id
+            JOIN USERS u                  ON sh.user_id       = u.user_id
+            LEFT JOIN BRANCH_INVENTORY bi ON sd.inventory_id = bi.inventory_id
+            LEFT JOIN PRODUCTS p          ON bi.product_id   = p.product_id
             WHERE sh.branch_id = %s
               AND DATE(sh.sale_date) BETWEEN %s AND %s
-              AND sh.customer_type != 'VOIDED'
+              AND (sh.customer_type IS NULL OR UPPER(TRIM(sh.customer_type)) != 'VOIDED')
               {cashier_filter_sql}
             ORDER BY sh.sale_date DESC, sh.trx_no ASC
         """, tuple(params))
@@ -1090,6 +1090,148 @@ def get_sales_report():
                 "total_net_profit":   round(total_net_profit, 2),
             },
             "line_items": line_items
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+
+@pos_bp.route('/pos/sales-report/debug', methods=['GET'])
+@jwt_required()
+def debug_sales_report():
+    claims = get_jwt()
+    current_branch_id = claims['branch']
+    
+    today       = datetime.now()
+    month_param = request.args.get('month', today.strftime('%Y-%m'))
+    target      = datetime.strptime(month_param, '%Y-%m')
+    
+    import calendar
+    last_day  = calendar.monthrange(target.year, target.month)[1]
+    date_from = target.replace(day=1).strftime('%Y-%m-%d')
+    date_to   = target.replace(day=last_day).strftime('%Y-%m-%d')
+
+    cur = mysql.connection.cursor()
+    try:
+        # Check 1: What branch_id is in your token?
+        cur.execute("SELECT COUNT(*) FROM SALES_HEADERS WHERE branch_id = %s", (current_branch_id,))
+        count_by_branch = cur.fetchone()[0]
+
+        # Check 2: What branch_ids actually exist in sales for this month?
+        cur.execute("""
+            SELECT branch_id, COUNT(*) as total, MIN(sale_date), MAX(sale_date)
+            FROM SALES_HEADERS
+            WHERE DATE(sale_date) BETWEEN %s AND %s
+            AND customer_type != 'VOIDED'
+            GROUP BY branch_id
+        """, (date_from, date_to))
+        branches_with_sales = cur.fetchall()
+
+        # Check 3: Raw count ignoring branch filter
+        cur.execute("""
+            SELECT COUNT(*) 
+            FROM SALES_HEADERS sh
+            JOIN SALES_DETAILS sd    ON sh.sale_id      = sd.sale_id
+            JOIN USERS u             ON sh.user_id       = u.user_id
+            JOIN BRANCH_INVENTORY bi ON sd.inventory_id = bi.inventory_id
+            JOIN PRODUCTS p          ON bi.product_id    = p.product_id
+            WHERE DATE(sh.sale_date) BETWEEN %s AND %s
+            AND sh.customer_type != 'VOIDED'
+        """, (date_from, date_to))
+        count_no_branch_filter = cur.fetchone()[0]
+
+        return jsonify({
+            "token_branch_id":          current_branch_id,
+            "sales_matching_your_branch": count_by_branch,
+            "branches_with_sales_this_month": [
+                {
+                    "branch_id":  row[0],
+                    "total_sales": row[1],
+                    "earliest":   str(row[2]),
+                    "latest":     str(row[3])
+                } for row in branches_with_sales
+            ],
+            "total_rows_ignoring_branch": count_no_branch_filter
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+
+
+
+@pos_bp.route('/pos/sales-report/debug2', methods=['GET'])
+@jwt_required()
+def debug_sales_report2():
+    claims = get_jwt()
+    current_branch_id = claims['branch']
+
+    cur = mysql.connection.cursor()
+    try:
+        # Check 1: SALES_HEADERS alone
+        cur.execute("""
+            SELECT COUNT(*) FROM SALES_HEADERS sh
+            WHERE sh.branch_id = %s AND customer_type != 'VOIDED'
+        """, (current_branch_id,))
+        count_headers = cur.fetchone()[0]
+
+        # Check 2: SALES_HEADERS + SALES_DETAILS
+        cur.execute("""
+            SELECT COUNT(*) FROM SALES_HEADERS sh
+            JOIN SALES_DETAILS sd ON sh.sale_id = sd.sale_id
+            WHERE sh.branch_id = %s AND customer_type != 'VOIDED'
+        """, (current_branch_id,))
+        count_with_details = cur.fetchone()[0]
+
+        # Check 3: + BRANCH_INVENTORY
+        cur.execute("""
+            SELECT COUNT(*) FROM SALES_HEADERS sh
+            JOIN SALES_DETAILS sd    ON sh.sale_id      = sd.sale_id
+            JOIN BRANCH_INVENTORY bi ON sd.inventory_id = bi.inventory_id
+            WHERE sh.branch_id = %s AND customer_type != 'VOIDED'
+        """, (current_branch_id,))
+        count_with_inventory = cur.fetchone()[0]
+
+        # Check 4: + PRODUCTS
+        cur.execute("""
+            SELECT COUNT(*) FROM SALES_HEADERS sh
+            JOIN SALES_DETAILS sd    ON sh.sale_id      = sd.sale_id
+            JOIN BRANCH_INVENTORY bi ON sd.inventory_id = bi.inventory_id
+            JOIN PRODUCTS p          ON bi.product_id   = p.product_id
+            WHERE sh.branch_id = %s AND customer_type != 'VOIDED'
+        """, (current_branch_id,))
+        count_with_products = cur.fetchone()[0]
+
+        # Check 5: + USERS
+        cur.execute("""
+            SELECT COUNT(*) FROM SALES_HEADERS sh
+            JOIN SALES_DETAILS sd    ON sh.sale_id      = sd.sale_id
+            JOIN BRANCH_INVENTORY bi ON sd.inventory_id = bi.inventory_id
+            JOIN PRODUCTS p          ON bi.product_id   = p.product_id
+            JOIN USERS u             ON sh.user_id      = u.user_id
+            WHERE sh.branch_id = %s AND customer_type != 'VOIDED'
+        """, (current_branch_id,))
+        count_with_users = cur.fetchone()[0]
+
+        # Check 6: Show sample of orphaned inventory_ids in SALES_DETAILS
+        cur.execute("""
+            SELECT sd.inventory_id 
+            FROM SALES_DETAILS sd
+            LEFT JOIN BRANCH_INVENTORY bi ON sd.inventory_id = bi.inventory_id
+            WHERE bi.inventory_id IS NULL
+            LIMIT 10
+        """)
+        orphaned_inventory_ids = [row[0] for row in cur.fetchall()]
+
+        return jsonify({
+            "1_headers_only":           count_headers,
+            "2_headers_+_details":      count_with_details,
+            "3_+_branch_inventory":     count_with_inventory,
+            "4_+_products":             count_with_products,
+            "5_+_users":                count_with_users,
+            "orphaned_inventory_ids":   orphaned_inventory_ids
         }), 200
 
     except Exception as e:
