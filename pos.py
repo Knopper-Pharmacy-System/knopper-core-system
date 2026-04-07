@@ -980,3 +980,107 @@ def get_shift_sales(target_shift_id):
     finally:
         cur.close()
 
+#sales report 
+
+@pos_bp.route('/pos/sales-report', methods=['GET'])
+@jwt_required()
+def get_sales_report():
+    claims = get_jwt()
+    current_branch_id = claims['branch']
+
+    if claims.get('role') not in ['admin', 'manager']:
+        return jsonify({"message": "Access Denied."}), 403
+
+    date_from = request.args.get('date_from', datetime.now().strftime('%Y-%m-%d'))
+    date_to = request.args.get('date_to', datetime.now().strftime('%Y-%m-%d'))
+    cashier_id_filter = request.args.get('cashier_id', None)
+
+    cur = mysql.connection.cursor()
+    try:
+        params = [current_branch_id, date_from, date_to]
+
+        cashier_filter_sql = ""
+        if cashier_id_filter:
+            cashier_filter_sql = "AND sh.user_id = %s"
+            params.append(cashier_id_filter)
+
+        cur.execute(f"""
+            SELECT 
+                DATE(sh.sale_date)                                                    AS sale_date,
+                TIME(sh.sale_date)                                                    AS sale_time,
+                u.full_name                                                           AS cashier,
+                sh.trx_no,
+                sh.invoice_no,
+                p.product_id                                                          AS item_code,
+                p.product_name_receipt                                                AS description,
+                sd.price_at_sale                                                      AS selling_price,
+                sd.price_level,
+                sd.quantity_sold,
+                (sd.quantity_sold * sd.price_at_sale)                                AS gross_sales,
+                IFNULL((sd.quantity_sold * sd.cost_at_sale), 0)                      AS gross_cost,
+                CASE 
+                    WHEN (sd.quantity_sold * sd.price_at_sale) > 0 
+                    THEN ROUND((sd.discount_applied / (sd.quantity_sold * sd.price_at_sale)) * 100, 2)
+                    ELSE 0 
+                END                                                                   AS discount_pct,
+                sd.discount_applied                                                   AS discount_amt,
+                (
+                    (sd.quantity_sold * sd.price_at_sale) 
+                    - IFNULL((sd.quantity_sold * sd.cost_at_sale), 0) 
+                    - sd.discount_applied
+                )                                                                     AS net_profit,
+                sd.discount_tag,
+                sh.customer_type,
+                sh.payment_method
+            FROM SALES_HEADERS sh
+            JOIN SALES_DETAILS sd  ON sh.sale_id      = sd.sale_id
+            JOIN USERS u           ON sh.user_id       = u.user_id
+            JOIN BRANCH_INVENTORY bi ON sd.inventory_id = bi.inventory_id
+            JOIN PRODUCTS p        ON bi.product_id    = p.product_id
+            WHERE sh.branch_id = %s
+              AND DATE(sh.sale_date) BETWEEN %s AND %s
+              AND sh.customer_type != 'VOIDED'
+              {cashier_filter_sql}
+            ORDER BY sh.sale_date DESC, sh.trx_no ASC
+        """, tuple(params))
+
+        rows = cur.fetchall()
+        columns = [desc[0] for desc in cur.description]
+
+        line_items = []
+        for row in rows:
+            line_items.append(dict(zip(columns, [
+                str(val) if hasattr(val, 'strftime') else   # dates → string
+                round(float(val), 2) if isinstance(val, (int, float)) and not isinstance(val, bool) else
+                val
+                for val in row
+            ])))
+
+        # Summary totals
+        total_gross_sales  = sum(r['gross_sales']  for r in line_items)
+        total_gross_cost   = sum(r['gross_cost']   for r in line_items)
+        total_discount_amt = sum(r['discount_amt'] for r in line_items)
+        total_net_profit   = sum(r['net_profit']   for r in line_items)
+
+        return jsonify({
+            "status": "success",
+            "filters": {
+                "branch_id":   current_branch_id,
+                "date_from":   date_from,
+                "date_to":     date_to,
+                "cashier_id":  cashier_id_filter
+            },
+            "totals": {
+                "total_line_items":    len(line_items),
+                "total_gross_sales":   round(total_gross_sales, 2),
+                "total_gross_cost":    round(total_gross_cost, 2),
+                "total_discount_amt":  round(total_discount_amt, 2),
+                "total_net_profit":    round(total_net_profit, 2),
+            },
+            "line_items": line_items
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
